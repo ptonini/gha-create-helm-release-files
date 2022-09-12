@@ -1,0 +1,4 @@
+.idea
+src/*/*
+src/.env
+src/metadata.json

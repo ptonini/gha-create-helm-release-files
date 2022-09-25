@@ -110,7 +110,7 @@ async function main() {
 
     }
 
-    await artifactClient.uploadArtifact('releases', ['/**'], process.env.GITHUB_WORKSPACE)
+    await artifactClient.uploadArtifact('releases', fs.readdirSync(process.env.GITHUB_WORKSPACE), process.env.GITHUB_WORKSPACE)
 
 }
 

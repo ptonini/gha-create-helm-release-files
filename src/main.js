@@ -35,8 +35,6 @@ async function saveReleaseData(parameters, values, environment) {
     Object.keys(parameters).forEach(p => {
         parametersFile.write(`export ${p}=${parameters[p]}\n`)
     })
-    await artifactClient.uploadArtifact(parameters.RELEASE_NAME, [valuesFileName, parametersFileName], parameters.RELEASE_NAME)
-
 }
 
 async function main() {
@@ -111,6 +109,8 @@ async function main() {
         await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
 
     }
+
+    await artifactClient.uploadArtifact('releases', ['/**'], process.env.GITHUB_WORKSPACE)
 
 }
 

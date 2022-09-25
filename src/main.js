@@ -110,8 +110,6 @@ async function main() {
 
     }
 
-    await artifactClient.uploadArtifact('releases', fs.readdirSync(process.env.GITHUB_WORKSPACE), process.env.GITHUB_WORKSPACE)
-
 }
 
 main().catch(err => core.setFailed(err));

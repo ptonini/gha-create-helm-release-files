@@ -26,18 +26,17 @@ async function getReleaseData(repo, ref) {
 
 async function saveReleaseData(parameters, values, environment) {
     fs.mkdirSync(parameters.RELEASE_NAME, { recursive: true })
-
     const valuesFileName = `${parameters.RELEASE_NAME}/values.json`
+    const parametersFileName = `${parameters.RELEASE_NAME}/parameters`
     let valuesFileContent =  JSON.stringify(values, null, 2)
+    let parametersFile = fs.createWriteStream(parametersFileName)
     valuesFileContent = valuesFileContent.replace(/%ENVIRONMENT%/g, environment)
     fs.writeFileSync(valuesFileName, valuesFileContent);
-    await artifactClient.uploadArtifact(parameters.RELEASE_NAME, [valuesFileName], parameters.RELEASE_NAME)
-
-    const parametersFileName = `${parameters.RELEASE_NAME}/parameters`
-    let parametersFile = fs.createWriteStream(parametersFileName)
     Object.keys(parameters).forEach(p => {
         parametersFile.write(`export ${p}=${parameters[p]}\n`)
     })
+    await artifactClient.uploadArtifact(parameters.RELEASE_NAME, [valuesFileName, parametersFileName], parameters.RELEASE_NAME)
+
 }
 
 async function main() {

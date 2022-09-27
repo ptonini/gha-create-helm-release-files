@@ -3,7 +3,6 @@ require('dotenv').config();
 const core = require('@actions/core');
 const fs = require('fs');
 const github = require('@actions/github');
-const artifact = require('@actions/artifact');
 const process = require("process");
 const yaml = require("yaml")
 const octokit = github.getOctokit(core.getInput('github_token'))
@@ -39,11 +38,13 @@ async function main() {
 
     const event = yaml.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'))
     const owner = process.env.GITHUB_REPOSITORY_OWNER
+    let releases = []
 
     if (process.env.PROMOTE_CANDIDATE === 'true' || process.env.GITHUB_WORKFLOW === 'configure') {
         const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
         const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo)
         manifest['helm']['values']['image']['tag'] = version
+        releases.push(manifest['helm']['release_name'])
         await saveReleaseData(parameters, manifest['helm']['values'], process.env.ENVIRONMENT)
     }
 
@@ -51,7 +52,6 @@ async function main() {
 
         let ingresses = new Set()
         let imagePullSecrets = new Set()
-
         let repos
         if (process.env.PROJECT_APP) {
             const response = await octokit['rest'].search.repos({q: `${process.env.PROJECT_APP} in:topics org:${owner}`})
@@ -63,6 +63,7 @@ async function main() {
 
         for (const repo of repos) {
             let data
+
             if (repo.full_name === process.env.GITHUB_REPOSITORY) {
                 data = await getReleaseData(repo, process.env.GITHUB_HEAD_REF)
                 data.manifest['helm']['values']['image']['checksum'] = core.getInput('checksum')
@@ -76,7 +77,7 @@ async function main() {
             try {
                 data.manifest['helm']['values']['image_pull_secrets'].forEach(i => {imagePullSecrets.add(i)})
             } catch {}
-
+            releases.push(data.manifest['helm']['release_name'])
             await saveReleaseData(data.parameters, data.manifest['helm']['values'], process.env.ENVIRONMENT)
         }
 
@@ -97,6 +98,7 @@ async function main() {
                     ingress_class: 'kong-public',
                 }
             }
+            releases.push(i)
             await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
         }
 
@@ -110,9 +112,12 @@ async function main() {
             type: 'kubernetes.io/dockerconfigjson',
             plain_text : {'.dockerconfigjson': process.env.REGISTRY_CREDENTIALS}
         }
+        releases.push(parameters.RELEASE_NAME)
         await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
 
     }
+
+    core.setOutput('releases', releases.join(' '))
 
 }
 

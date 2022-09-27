@@ -7,7 +7,7 @@ const artifact = require('@actions/artifact');
 const process = require("process");
 const yaml = require("yaml")
 const octokit = github.getOctokit(core.getInput('github_token'))
-const artifactClient = artifact.create();
+
 
 
 async function getReleaseData(repo, ref) {
@@ -26,14 +26,12 @@ async function getReleaseData(repo, ref) {
 
 async function saveReleaseData(parameters, values, environment) {
     fs.mkdirSync(parameters.RELEASE_NAME, { recursive: true })
-    const valuesFileName = `${parameters.RELEASE_NAME}/values.json`
-    const parametersFileName = `${parameters.RELEASE_NAME}/parameters`
     let valuesFileContent =  JSON.stringify(values, null, 2)
-    let parametersFile = fs.createWriteStream(parametersFileName)
+    let parametersFile = fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
     valuesFileContent = valuesFileContent.replace(/%ENVIRONMENT%/g, environment)
-    fs.writeFileSync(valuesFileName, valuesFileContent);
+    fs.writeFileSync(`${parameters.RELEASE_NAME}/values`, valuesFileContent);
     Object.keys(parameters).forEach(p => {
-        parametersFile.write(`export ${p}=${parameters[p]}\n`)
+        parametersFile.write(`${p}=${parameters[p]}\n`)
     })
 }
 
@@ -52,6 +50,8 @@ async function main() {
     if (process.env.CREATE_STAGING === 'true') {
 
         let ingresses = new Set()
+        let imagePullSecrets = new Set()
+
         let repos
         if (process.env.PROJECT_APP) {
             const response = await octokit['rest'].search.repos({q: `${process.env.PROJECT_APP} in:topics org:${owner}`})
@@ -71,8 +71,12 @@ async function main() {
                 data.manifest['helm']['values']['image']['tag'] = data.version
             }
             try {
-                data.manifest['helm']['values']['service']['annotations']['nodis.com.br/service-ingresses'].split(',').forEach(i => {ingresses.add(i)})
+                ingresses.add(data.manifest['helm']['values']['service']['labels']['ingress'])
             } catch {}
+            try {
+                data.manifest['helm']['values']['image_pull_secrets'].forEach(i => {imagePullSecrets.add(i)})
+            } catch {}
+
             await saveReleaseData(data.parameters, data.manifest['helm']['values'], process.env.ENVIRONMENT)
         }
 

@@ -82,22 +82,16 @@ async function main() {
         }
 
         for (const i of ingresses) {
-            const parameters =  {
-                RELEASE_NAME: i,
-                CHART: 'configmap',
-                CHART_VERSION: '^2.0.0',
-                REPOSITORY: 'https://charts.nodis.com.br'
-            }
-            const values = {
-                annotations: {
-                    'nodis.com.br/managed-ingress': 'true'
-                },
-                data: {
-                    ingress: i,
-                    domain: `${i}.${process.env.STAGING_DOMAIN}`,
-                    ingress_class: 'kong-public',
-                }
-            }
+            const ingressPath = `${process.env.PRD_ENVIRONMENT}/${process.env.PRD_NAMESPACE}/${i}`
+            const repo = process.env.INGRESS_CONFIG_REPOSITORY
+            const {data: {content: parametersContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${ingressPath}/parameters`})
+            const {data: {content: valuesContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${ingressPath}/values`})
+            const parameters = {};
+            const values = yaml.parse(Buffer.from(valuesContent, 'base64').toString('utf-8'))
+            Buffer.from(parametersContent, 'base64').toString('utf-8').split('\n').filter(n => n).forEach(line => {
+                parameters[line.split('=')[0]] = line.split('=')[1]
+            })
+            values.data.domain = `${i}.${process.env.STAGING_DOMAIN}`
             releases.push(i)
             await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
         }

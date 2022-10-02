@@ -23,7 +23,7 @@ async function getReleaseData(repo, ref) {
     return {manifest: manifest, parameters: parameters, version: version}
 }
 
-async function saveReleaseData(parameters, values, environment) {
+function saveReleaseData(parameters, values, environment) {
     fs.mkdirSync(parameters.RELEASE_NAME, { recursive: true })
     let valuesFileContent =  JSON.stringify(values, null, 2)
     let parametersFile = fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
@@ -45,7 +45,7 @@ async function main() {
         const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo)
         manifest['helm']['values']['image']['tag'] = version
         releases.push(manifest['helm']['release_name'])
-        await saveReleaseData(parameters, manifest['helm']['values'], process.env.ENVIRONMENT)
+        saveReleaseData(parameters, manifest['helm']['values'], process.env.ENVIRONMENT)
     }
 
     if (process.env.CREATE_STAGING === 'true') {
@@ -53,17 +53,16 @@ async function main() {
         let ingresses = new Set()
         let imagePullSecrets = new Set()
         let repos
-        if (process.env.PROJECT_APP) {
-            const response = await octokit['rest'].search.repos({q: `${process.env.PROJECT_APP} in:topics org:${owner}`})
+        if (process.env.APP_GROUP) {
+            const response = await octokit['rest'].search.repos({q: `${process.env.APP_GROUP} in:topics org:${owner}`})
             repos = response['data']['items']
         } else {
-            const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
-            repos = [repo]
+            const response = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
+            repos = [response['data']]
         }
 
         for (const repo of repos) {
             let data
-
             if (repo.full_name === process.env.GITHUB_REPOSITORY) {
                 data = await getReleaseData(repo, process.env.GITHUB_HEAD_REF)
                 data.manifest['helm']['values']['image']['checksum'] = core.getInput('checksum')
@@ -78,36 +77,36 @@ async function main() {
                 data.manifest['helm']['values']['image_pull_secrets'].forEach(i => {imagePullSecrets.add(i)})
             } catch {}
             releases.push(data.manifest['helm']['release_name'])
-            await saveReleaseData(data.parameters, data.manifest['helm']['values'], process.env.ENVIRONMENT)
+            saveReleaseData(data.parameters, data.manifest['helm']['values'], process.env.ENVIRONMENT)
         }
 
         for (const i of ingresses) {
-            const ingressPath = `${process.env.PRD_ENVIRONMENT}/${process.env.PRD_NAMESPACE}/${i}`
+            const path = `${process.env.PRD_ENVIRONMENT}/${process.env.PRD_NAMESPACE}/${i}`
             const repo = process.env.INGRESS_CONFIG_REPOSITORY
-            const {data: {content: parametersContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${ingressPath}/parameters`})
-            const {data: {content: valuesContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${ingressPath}/values`})
+            const {data: {content: pContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${path}/parameters`})
+            const {data: {content: vContent}} = await octokit['rest'].repos.getContent({owner: owner, repo: repo, path: `${path}/values`})
             const parameters = {};
-            const values = yaml.parse(Buffer.from(valuesContent, 'base64').toString('utf-8'))
-            Buffer.from(parametersContent, 'base64').toString('utf-8').split('\n').filter(n => n).forEach(line => {
+            const values = yaml.parse(Buffer.from(vContent, 'base64').toString('utf-8'))
+            Buffer.from(pContent, 'base64').toString('utf-8').split('\n').filter(n => n).forEach(line => {
                 parameters[line.split('=')[0]] = line.split('=')[1]
             })
             values.data.domain = `${i}.${process.env.STAGING_DOMAIN}`
             releases.push(i)
-            await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
+            saveReleaseData(parameters, values, process.env.ENVIRONMENT)
         }
 
         const parameters =  {
-            RELEASE_NAME: 'ghcr-credentials',
-            CHART: 'secret',
-            CHART_VERSION: '^2.0.0',
-            REPOSITORY: 'https://charts.nodis.com.br'
+            RELEASE_NAME: process.env.IMAGE_PULL_SECRET,
+            CHART: process.env.HELM_SECRET_CHART,
+            CHART_VERSION: process.env.HELM_SECRET_CHART_VERSION,
+            REPOSITORY: process.env.HELM_REPOSITORY
         }
         const values = {
             type: 'kubernetes.io/dockerconfigjson',
             plain_text : {'.dockerconfigjson': process.env.REGISTRY_CREDENTIALS}
         }
         releases.push(parameters.RELEASE_NAME)
-        await saveReleaseData(parameters, values, process.env.ENVIRONMENT)
+        saveReleaseData(parameters, values, process.env.ENVIRONMENT)
 
     }
 

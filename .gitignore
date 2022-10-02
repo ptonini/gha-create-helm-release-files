@@ -2,3 +2,4 @@
 src/*/*
 src/.env
 src/metadata.json
+src/event.json

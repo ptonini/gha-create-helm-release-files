@@ -40,7 +40,7 @@ async function main() {
     const owner = process.env.GITHUB_REPOSITORY_OWNER
     let releases = []
 
-    if (process.env.PROMOTE_CANDIDATE === 'true' || process.env.GITHUB_WORKFLOW === 'configure') {
+    if (process.env.PROMOTE_CANDIDATE === 'true' || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
         const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
         const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo)
         manifest['helm']['values']['image']['tag'] = version
@@ -91,7 +91,7 @@ async function main() {
                 parameters[line.split('=')[0]] = line.split('=')[1]
             })
             values.data.domain = `${i}.${process.env.STAGING_DOMAIN}`
-            releases.push(i)
+            releases.push(parameters.RELEASE_NAME)
             saveReleaseData(parameters, values, process.env.ENVIRONMENT)
         }
 

@@ -40,7 +40,7 @@ async function main() {
     const owner = process.env.GITHUB_REPOSITORY_OWNER
     let releases = []
 
-    if (process.env.PROMOTE_CANDIDATE === 'true' || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
+    if (['workflow_dispatch', 'push'].includes(process.env.GITHUB_EVENT_NAME)) {
         const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
         const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo)
         manifest['helm']['values']['image']['tag'] = version
@@ -48,7 +48,7 @@ async function main() {
         saveReleaseData(parameters, manifest['helm']['values'], process.env.ENVIRONMENT)
     }
 
-    if (process.env.CREATE_STAGING === 'true') {
+    if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
 
         let ingresses = new Set()
         let imagePullSecrets = new Set()

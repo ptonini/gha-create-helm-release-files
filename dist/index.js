@@ -69,6 +69,7 @@ async function main() {
     const eventName = process.env.GITHUB_EVENT_NAME
     const owner = process.env.GITHUB_REPOSITORY_OWNER
     let releases = []
+    let message = ''
 
     if (['workflow_dispatch', 'push'].includes(eventName)) {
         const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
@@ -88,6 +89,7 @@ async function main() {
         let ingresses = new Set()
         let repos
         let releaseName
+
 
         if (appGroup) {
             const res = await octokit['rest'].search.repos({q: `${appGroup} in:topics org:${owner}`})
@@ -138,11 +140,13 @@ async function main() {
             values.data.hostname = `${i}.${event.number}.${releaseName}.${environment}.${orgDomain}`
             releases.push(parameters.RELEASE_NAME)
             saveReleaseData(parameters, values, environment)
+            message += `https://${values.data.hostname}\n`
         }
 
     }
 
     core.setOutput('releases', releases.join(' '))
+    core.setOutput('message', message)
 
 }
 

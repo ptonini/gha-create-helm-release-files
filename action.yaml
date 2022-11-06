@@ -11,3 +11,7 @@ inputs:
     description: ''
     default: ''
     required: false
+  org_domain:
+    description: ''
+    default: ''
+    required: false

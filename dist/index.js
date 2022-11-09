@@ -69,44 +69,40 @@ async function main() {
     const event = yaml.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'))
     const eventName = process.env.GITHUB_EVENT_NAME
     const owner = process.env.GITHUB_REPOSITORY_OWNER
-    const headRef = process.env.GITHUB_HEAD_REF
+    const ref = process.env.GITHUB_HEAD_REF ? process.env.GITHUB_HEAD_REF : undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
-    const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo, headRef)
+    const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo, ref)
     const releaseName = manifest['helm']['release_name']
-    const namespace = eventName === 'pull_request' ? `${releaseName}-${event.number}` : manifest['helm']['namespace']
 
-    const checksum = core.getInput('checksum')
+    const namespace = core.getInput('namespace') ? core.getInput('namespace').replace(/_/g, '-') : manifest['helm']['namespace']
+    const environment = core.getInput('environment') ? core.getInput('environment') : manifest['environment']
+    const digest = core.getInput('digest')
     const orgDomain = core.getInput('org_domain')
-    const environment = process.env.ENVIRONMENT
-    const appGroup = process.env.APP_GROUP
+    const orgAppGroups = yaml.parse(core.getInput('org_app_groups')) ?? []
 
     let releases = [releaseName]
-    let ingresses = new Set()
-
-
-    if (checksum) {
-        manifest['helm']['values']['image']['checksum'] = core.getInput('checksum')
-    } else {
-        manifest['helm']['values']['image']['tag'] = version
-    }
-
-    ingresses.add(manifest['helm'].values?.service?.labels?.ingress)
-    ingresses.add(manifest['helm'].values?.service?.labels?.invalid)
-    parameters['NAMESPACE'] = namespace
-    saveReleaseData(parameters, manifest['helm']['values'], environment)
+    manifest['helm']['values']['image']['digest'] = digest
+    manifest['helm']['values']['image']['tag'] = digest ? null : version
+    const defaultParams = {NAMESPACE: namespace, EXTRA_ARGS: eventName === 'pull_request' ? '--create-namespace' : ''}
+    saveReleaseData({...parameters,...defaultParams}, manifest['helm']['values'], environment)
 
     if (eventName === 'pull_request') {
 
+        const appGroups = orgAppGroups.filter(v => event.repository.topics.includes(v));
         let message = `namespace: ${namespace}\n`
-        const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${appGroup} in:topics org:${owner}`})
+        let ingresses = new Set()
 
-        for (const r of repos) if (r.full_name !== event.repository.full_name) {
-            const data = await getReleaseData(r)
-            data.manifest['helm']['values']['image']['tag'] = data.version
-            ingresses.add(data.manifest['helm'].values?.service?.labels?.ingress)
-            releases.push(data.manifest['helm']['release_name'])
-            data.parameters['NAMESPACE'] = namespace
-            saveReleaseData(data.parameters, data.manifest['helm']['values'], environment)
+        ingresses.add(manifest['helm'].values?.service?.labels?.ingress)
+
+        if (appGroups.length > 0) {
+            const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${appGroups.join(" ")} in:topics org:${owner}`})
+            for (const r of repos) if (r.full_name !== event.repository.full_name) {
+                const data = await getReleaseData(r)
+                data.manifest['helm']['values']['image']['tag'] = data.version
+                ingresses.add(data.manifest['helm'].values?.service?.labels?.ingress)
+                releases.push(data.manifest['helm']['release_name'])
+                saveReleaseData({...data.parameters,...defaultParams}, data.manifest['helm']['values'], environment)
+            }
         }
 
         for (const i of ingresses) if (i) {
@@ -121,14 +117,14 @@ async function main() {
                 path: `${manifest['environment']}/${manifest['helm']['namespace']}/${i}/values`
             })
             const values = yaml.parse(Buffer.from(vContent, 'base64').toString('utf-8'))
-            const parameters = {'NAMESPACE': namespace};
+            const parameters = {...defaultParams};
             Buffer.from(pContent, 'base64')
                 .toString('utf-8')
                 .split('\n')
                 .filter(n => n)
                 .forEach(line => {
-                parameters[line.split('=')[0]] = line.split('=')[1]
-            })
+                    parameters[line.split('=')[0]] = line.split('=')[1]
+                })
             values.data.hostname = `${i}.${event.number}.${releaseName}.${environment}.${orgDomain}`
             releases.push(parameters.RELEASE_NAME)
             saveReleaseData(parameters, values, environment)

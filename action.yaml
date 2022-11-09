@@ -7,11 +7,19 @@ inputs:
   github_token:
     description: ''
     required: true
-  checksum:
+  digest:
     description: ''
     default: ''
     required: false
   org_domain:
     description: ''
-    default: ''
+    required: false
+  org_app_groups:
+    description: ''
+    required: false
+  namespace:
+    description: ''
+    required: false
+  environment:
+    description: ''
     required: false

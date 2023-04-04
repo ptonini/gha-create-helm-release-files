@@ -1,4 +1,5 @@
-require('dotenv').config();
+const dotenv = require('dotenv').config();
+require('dotenv-expand').expand(dotenv)
 
 const core = require('@actions/core');
 const fs = require('fs');
@@ -9,29 +10,34 @@ const config = require('./config.js');
 const octokit = github.getOctokit(core.getInput('github_token'))
 
 
-async function getReleaseData(repo, ref) {
-    const {data: {content: manifestContent}} = await octokit['rest'].repos.getContent({
-        owner: repo.owner.login,
-        repo: repo.name,
-        path: config.manifestFile,
-        ref: ref
-    })
-    const {data: {content: rpManifestContent}} = await octokit['rest'].repos.getContent({
-        owner: repo.owner.login,
-        repo: repo.name,
-        path: config.rpManifestFile,
-        ref: ref
-    })
-    const manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
-    const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
-    const parameters = {
-        RELEASE_NAME: manifest['helm']['release_name'],
-        CHART: manifest['helm']['chart'],
-        CHART_VERSION: manifest['helm']['chart_version'],
-        REPOSITORY: manifest['helm']['repository'],
-        NAMESPACE: manifest['helm']['namespace']
+async function getReleaseData(owner, repo, ref) {
+    core.info(`fetching ${owner}/${repo} manifests`)
+    try {
+        const {data: {content: manifestContent}} = await octokit['rest'].repos.getContent({
+            owner: owner,
+            repo: repo,
+            path: config.manifestFile,
+            ref: ref
+        })
+        const {data: {content: rpManifestContent}} = await octokit['rest'].repos.getContent({
+            owner: owner,
+            repo: repo,
+            path: config.rpManifestFile,
+            ref: ref
+        })
+        const manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
+        const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
+        const parameters = {
+            RELEASE_NAME: manifest['helm']['release_name'],
+            CHART: manifest['helm']['chart'],
+            CHART_VERSION: manifest['helm']['chart_version'],
+            REPOSITORY: manifest['helm']['repository'],
+            NAMESPACE: manifest['helm']['namespace']
+        }
+        return {manifest: manifest, parameters: parameters, version: version}
+    } catch (e) {
+        core.setFailed(e)
     }
-    return {manifest: manifest, parameters: parameters, version: version}
 }
 
 function saveReleaseData(parameters, values, environment) {
@@ -52,7 +58,7 @@ async function main() {
     const owner = process.env.GITHUB_REPOSITORY_OWNER
     const ref = process.env.GITHUB_HEAD_REF ? process.env.GITHUB_HEAD_REF : undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
-    const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(repo, ref)
+    const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(owner, repo.name, ref)
     const releaseName = manifest['helm']['release_name']
 
     const namespace = core.getInput('namespace') ? core.getInput('namespace').replace(/_/g, '-') : manifest['helm']['namespace']
@@ -62,6 +68,7 @@ async function main() {
     const orgAppGroups = yaml.parse(core.getInput('org_app_groups')) ?? []
 
     let releases = [releaseName]
+    let hostnames = []
     manifest['helm']['values']['image']['digest'] = digest
     manifest['helm']['values']['image']['tag'] = digest ? null : version
     const defaultParams = {NAMESPACE: namespace, EXTRA_ARGS: eventName === 'pull_request' ? '--create-namespace' : ''}
@@ -78,15 +85,18 @@ async function main() {
         if (appGroups.length > 0) {
             const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${appGroups.join(" ")} in:topics org:${owner}`})
             for (const r of repos) if (r.full_name !== event.repository.full_name) {
-                const data = await getReleaseData(r)
-                data.manifest['helm']['values']['image']['tag'] = data.version
-                ingresses.add(data.manifest['helm'].values?.service?.labels?.ingress)
-                releases.push(data.manifest['helm']['release_name'])
-                saveReleaseData({...data.parameters,...defaultParams}, data.manifest['helm']['values'], environment)
+                const data = await getReleaseData(r.owner.login, r.name)
+                if (data !== undefined ) {
+                    data.manifest['helm']['values']['image']['tag'] = data.version
+                    ingresses.add(data.manifest['helm'].values?.service?.labels?.ingress)
+                    releases.push(data.manifest['helm']['release_name'])
+                    saveReleaseData({...data.parameters,...defaultParams}, data.manifest['helm']['values'], environment)
+                }
             }
         }
 
         for (const i of ingresses) if (i) {
+            core.info(`fetching ${i} ingress from ${owner}/${config.ingressConfigsRepository}`)
             const {data: {content: pContent}} = await octokit['rest'].repos.getContent({
                 owner: owner,
                 repo: config.ingressConfigsRepository,
@@ -108,6 +118,7 @@ async function main() {
                 })
             values.data.hostname = `${i}.${event.number}.${releaseName}.${environment}.${orgDomain}`
             releases.push(parameters.RELEASE_NAME)
+            hostnames.push(values.data.hostname)
             saveReleaseData(parameters, values, environment)
             message += `${i}: https://${values.data.hostname}\n`
         }
@@ -117,6 +128,7 @@ async function main() {
     }
 
     core.setOutput('releases', releases.join(' '))
+    core.setOutput('hostnames', JSON.stringify(hostnames))
 
 }
 

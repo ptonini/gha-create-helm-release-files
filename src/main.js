@@ -1,13 +1,11 @@
-const dotenv = require('dotenv').config();
-require('dotenv-expand').expand(dotenv)
+require('dotenv-expand').expand(require('dotenv').config())
 
 const core = require('@actions/core');
 const fs = require('fs');
-const github = require('@actions/github');
+const octokit = require('@actions/github').getOctokit(core.getInput('github_token'))
 const process = require("process");
 const yaml = require("yaml")
 const config = require('./config.js');
-const octokit = github.getOctokit(core.getInput('github_token'))
 
 
 async function getReleaseData(owner, repo, ref) {

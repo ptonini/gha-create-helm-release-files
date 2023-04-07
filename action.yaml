@@ -7,6 +7,15 @@ inputs:
   github_token:
     description: ''
     required: true
+  manifest_file:
+    description: ''
+    required: true
+  rp_manifest_file:
+    description: ''
+    required: true
+  ingress_configs_repository:
+    description: ''
+    required: true
   digest:
     description: ''
     default: ''
@@ -14,7 +23,7 @@ inputs:
   org_domain:
     description: ''
     required: false
-  org_app_groups:
+  app_groups:
     description: ''
     required: false
   namespace:

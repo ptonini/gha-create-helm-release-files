@@ -26,9 +26,12 @@ inputs:
   app_groups:
     description: ''
     required: false
-  namespace:
+  environment:
     description: ''
     required: false
-  environment:
+  staging_environment:
+    description: ''
+    required: false
+  staging_namespace:
     description: ''
     required: false

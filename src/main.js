@@ -22,15 +22,17 @@ async function getReleaseData(owner, repo, ref) {
             path: core.getInput('rp_manifest_file'),
             ref: ref
         })
-        const manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
+        let manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
+        if ('helm' in manifest) {manifest = manifest.helm}
         const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
         const parameters = {
-            RELEASE_NAME: manifest['helm']['release_name'],
-            CHART: manifest['helm']['chart'],
-            CHART_VERSION: manifest['helm']['chart_version'],
-            REPOSITORY: manifest['helm']['repository'],
-            NAMESPACE: manifest['helm']['namespace']
+            RELEASE_NAME: manifest['release_name'],
+            CHART: manifest['chart'],
+            CHART_VERSION: manifest['chart_version'],
+            REPOSITORY: manifest['repository'],
+            NAMESPACE: manifest['namespace']
         }
+
         return {manifest: manifest, parameters: parameters, version: version}
     } catch (e) {
         core.setFailed(e)
@@ -51,58 +53,57 @@ function saveReleaseData(parameters, values, environment) {
 async function main() {
 
     const event = yaml.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'))
-    const eventName = process.env.GITHUB_EVENT_NAME
+    const isStaging= process.env.GITHUB_EVENT_NAME === "pull_request"
     const owner = process.env.GITHUB_REPOSITORY_OWNER
-    const ref = process.env.GITHUB_HEAD_REF ? process.env.GITHUB_HEAD_REF : undefined
+    const ref = process.env.GITHUB_HEAD_REF || undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
     const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(owner, repo.name, ref)
-    const releaseName = manifest['helm']['release_name']
-
     const digest = core.getInput('digest')
     const orgDomain = core.getInput('org_domain')
     const appGroups = yaml.parse(core.getInput('app_groups')) ?? []
     const ingressConfigsRepository = core.getInput('ingress_configs_repository')
+    const environment = core.getInput('environment')
+    const stagingEnvironment = core.getInput('staging_environment')
+    const stagingNamespace = core.getInput('staging_namespace').replace(/_/g, '-')
 
-    const namespace = core.getInput('namespace') ? core.getInput('namespace').replace(/_/g, '-') : manifest['helm']['namespace']
-    const environment = core.getInput('environment') ? core.getInput('environment') : manifest['environment']
-
-    let releases = [releaseName]
+    let releases = [manifest['release_name']]
     let hostnames = []
-    manifest['helm']['values']['image']['digest'] = digest
-    manifest['helm']['values']['image']['tag'] = digest ? null : version
-    const defaultParams = {NAMESPACE: namespace, EXTRA_ARGS: eventName === 'pull_request' ? '--create-namespace' : ''}
-    saveReleaseData({...parameters,...defaultParams}, manifest['helm']['values'], environment)
 
-    if (eventName === 'pull_request') {
-
+    if (!isStaging) {
+        manifest['values']['image']['tag'] = version
+        saveReleaseData(parameters, manifest['values'], environment)
+    } else {
+        manifest['values']['image']['digest'] = digest
+        manifest['values']['replicas'] = 1
+        const defaultParams = {NAMESPACE: stagingNamespace, EXTRA_ARGS: '--create-namespace'}
+        saveReleaseData({...parameters,...defaultParams}, manifest['values'], stagingEnvironment)
         const memberOf = appGroups.filter(v => event.repository.topics.includes(v));
-        let message = `namespace: ${namespace}\n`
-        let ingresses = new Set([manifest['helm'].values?.service?.labels?.ingress])
-
+        let message = `namespace: ${stagingNamespace}\n`
+        let ingresses = new Set([manifest.values?.service?.labels?.ingress])
         if (memberOf.length > 0) {
             const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${memberOf.join(" ")} in:topics org:${owner}`})
             for (const r of repos) if (r.full_name !== event.repository.full_name) {
                 const data = await getReleaseData(r.owner.login, r.name)
                 if (data !== undefined ) {
-                    data.manifest['helm']['values']['image']['tag'] = data.version
-                    ingresses.add(data.manifest['helm'].values?.service?.labels?.ingress)
-                    releases.push(data.manifest['helm']['release_name'])
-                    saveReleaseData({...data.parameters,...defaultParams}, data.manifest['helm']['values'], environment)
+                    data.manifest['values']['image']['tag'] = data.version
+                    data.manifest['values']['replicas'] = 1
+                    ingresses.add(data.manifest.values?.service?.labels?.ingress)
+                    releases.push(data.manifest['release_name'])
+                    saveReleaseData({...data.parameters,...defaultParams}, data.manifest['values'], stagingEnvironment)
                 }
             }
         }
-
         for (const i of ingresses) if (i) {
             core.info(`fetching ${i} ingress from ${owner}/${ingressConfigsRepository}`)
             const {data: {content: pContent}} = await octokit['rest'].repos.getContent({
                 owner: owner,
                 repo: ingressConfigsRepository,
-                path: `${manifest['environment']}/${manifest['helm']['namespace']}/${i}/parameters`
+                path: `${environment}/${manifest['namespace']}/${i}/parameters`
             })
             const {data: {content: vContent}} = await octokit['rest'].repos.getContent({
                 owner: owner,
                 repo: ingressConfigsRepository,
-                path: `${manifest['environment']}/${manifest['helm']['namespace']}/${i}/values`
+                path: `${environment}/${manifest['namespace']}/${i}/values`
             })
             const values = yaml.parse(Buffer.from(vContent, 'base64').toString('utf-8'))
             const parameters = {...defaultParams};
@@ -113,13 +114,12 @@ async function main() {
                 .forEach(line => {
                     parameters[line.split('=')[0]] = line.split('=')[1]
                 })
-            values.data.hostname = `${i}.${event.number}.${releaseName}.${environment}.${orgDomain}`
+            values.data.hostname = `${i}.${event.number}.${manifest['release_name']}.${environment}.${orgDomain}`
             releases.push(parameters.RELEASE_NAME)
             hostnames.push(values.data.hostname)
             saveReleaseData(parameters, values, environment)
             message += `${i}: https://${values.data.hostname}\n`
         }
-
         core.setOutput('message', message)
 
     }

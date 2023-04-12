@@ -64,10 +64,9 @@ async function main() {
     const ingressConfigsRepository = core.getInput('ingress_configs_repository')
     const environment = core.getInput('environment')
     const stagingEnvironment = core.getInput('staging_environment')
-    const stagingNamespace = core.getInput('staging_namespace').replace(/_/g, '-')
+    const stagingNamespace = core.getInput('staging_namespace')
 
     let releases = [manifest['release_name']]
-    let hostnames = []
 
     if (!isStaging) {
         manifest['values']['image']['tag'] = version
@@ -77,13 +76,14 @@ async function main() {
         manifest['values']['replicas'] = 1
         const defaultParams = {NAMESPACE: stagingNamespace, EXTRA_ARGS: '--create-namespace'}
         saveReleaseData({...parameters,...defaultParams}, manifest['values'], stagingEnvironment)
-        const memberOf = appGroups.filter(v => event.repository.topics.includes(v));
         let message = `namespace: ${stagingNamespace}\n`
+        let hostnames = []
         let ingresses = new Set([manifest.values?.service?.labels?.ingress])
+        const memberOf = appGroups.filter(v => event.repository.topics.includes(v));
         if (memberOf.length > 0) {
             const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${memberOf.join(" ")} in:topics org:${owner}`})
             for (const r of repos) if (r.full_name !== event.repository.full_name) {
-                const data = await getReleaseData(r.owner.login, r.name)
+                const data= await getReleaseData(r.owner.login, r.name)
                 if (data !== undefined ) {
                     data.manifest['values']['image']['tag'] = data.version
                     data.manifest['values']['replicas'] = 1
@@ -121,11 +121,11 @@ async function main() {
             message += `${i}: https://${values.data.hostname}\n`
         }
         core.setOutput('message', message)
-
+        core.setOutput('hostnames', JSON.stringify(hostnames))
     }
 
     core.setOutput('releases', releases.join(' '))
-    core.setOutput('hostnames', JSON.stringify(hostnames))
+
 
 }
 

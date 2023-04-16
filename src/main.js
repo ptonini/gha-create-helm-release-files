@@ -41,11 +41,11 @@ async function getReleaseData(owner, repo, ref) {
 
 function saveReleaseData(parameters, values, environment) {
     fs.mkdirSync(parameters.RELEASE_NAME, {recursive: true})
-    let valuesFileContent = JSON.stringify(values, null, 2)
-    let parametersFile = fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
+    let valuesFileContent= JSON.stringify(values, null, 2)
+    let parametersFile= fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
     valuesFileContent = valuesFileContent.replace(/%ENVIRONMENT%/g, environment)
     fs.writeFileSync(`${parameters.RELEASE_NAME}/values`, valuesFileContent);
-    Object.keys(parameters).forEach(p => {
+    Object.keys(parameters).forEach(p=> {
         parametersFile.write(`${p}=${parameters[p]}\n`)
     })
 }
@@ -58,6 +58,7 @@ async function main() {
     const ref = process.env.GITHUB_HEAD_REF || undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
     const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(owner, repo.name, ref)
+
     const digest = core.getInput('digest')
     const orgDomain = core.getInput('org_domain')
     const appGroups = yaml.parse(core.getInput('app_groups')) ?? []
@@ -125,7 +126,6 @@ async function main() {
     }
 
     core.setOutput('releases', releases.join(' '))
-
 
 }
 

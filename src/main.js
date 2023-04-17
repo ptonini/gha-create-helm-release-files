@@ -23,7 +23,7 @@ async function getReleaseData(owner, repo, ref) {
             ref: ref
         })
         let manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
-        if ('helm' in manifest) {manifest = manifest.helm}
+        manifest = 'helm' in manifest ? manifest.helm : manifest
         const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
         const parameters = {
             RELEASE_NAME: manifest['release_name'],
@@ -32,7 +32,6 @@ async function getReleaseData(owner, repo, ref) {
             REPOSITORY: manifest['repository'],
             NAMESPACE: manifest['namespace']
         }
-
         return {manifest: manifest, parameters: parameters, version: version}
     } catch (e) {
         core.setFailed(e)
@@ -58,6 +57,7 @@ async function main() {
     const ref = process.env.GITHUB_HEAD_REF || undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
     const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(owner, repo.name, ref)
+    let releases = [manifest['release_name']]
 
     const digest = core.getInput('digest')
     const orgDomain = core.getInput('org_domain')
@@ -67,12 +67,8 @@ async function main() {
     const stagingEnvironment = core.getInput('staging_environment')
     const stagingNamespace = core.getInput('staging_namespace')
 
-    let releases = [manifest['release_name']]
 
-    if (!isStaging) {
-        manifest['values']['image']['tag'] = version
-        saveReleaseData(parameters, manifest['values'], environment)
-    } else {
+    if (isStaging) {
         manifest['values']['image']['digest'] = digest
         manifest['values']['replicas'] = 1
         const defaultParams = {NAMESPACE: stagingNamespace, EXTRA_ARGS: '--create-namespace'}
@@ -115,14 +111,17 @@ async function main() {
                 .forEach(line => {
                     parameters[line.split('=')[0]] = line.split('=')[1]
                 })
-            values.data.hostname = `${i}.${event.number}.${manifest['release_name']}.${environment}.${orgDomain}`
+            values.data.hostname = `${i}.${event.number}.${manifest['release_name']}.${stagingEnvironment}.${orgDomain}`
             releases.push(parameters.RELEASE_NAME)
             hostnames.push(values.data.hostname)
-            saveReleaseData(parameters, values, environment)
+            saveReleaseData(parameters, values, stagingEnvironment)
             message += `${i}: https://${values.data.hostname}\n`
         }
         core.setOutput('message', message)
         core.setOutput('hostnames', JSON.stringify(hostnames))
+    } else {
+        manifest['values']['image']['tag'] = version
+        saveReleaseData(parameters, manifest['values'], environment)
     }
 
     core.setOutput('releases', releases.join(' '))

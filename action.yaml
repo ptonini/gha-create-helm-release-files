@@ -23,9 +23,6 @@ inputs:
   org_domain:
     description: ''
     required: false
-  app_groups:
-    description: ''
-    required: false
   environment:
     description: ''
     required: false

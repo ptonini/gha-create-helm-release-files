@@ -1,10 +1,10 @@
 require('dotenv-expand').expand(require('dotenv').config())
-
+const {Octokit} = require("@octokit/rest")
 const core = require('@actions/core');
 const fs = require('fs');
-const octokit = require('@actions/github').getOctokit(core.getInput('github_token'))
 const process = require("process");
 const yaml = require("yaml")
+const octokit = new Octokit({auth: core.getInput('github_token')})
 
 
 async function getReleaseData(owner, repo, ref) {
@@ -22,6 +22,16 @@ async function getReleaseData(owner, repo, ref) {
             path: core.getInput('rp_manifest_file'),
             ref: ref
         })
+        let stagingValues = {}
+        try {
+            let resp = await octokit['rest'].actions['getRepoVariable']({
+                owner: owner,
+                repo: repo,
+                name: 'staging_values'
+            })
+            stagingValues = yaml.parse(resp.data.value)
+        } catch (e) {
+        }
         let manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
         manifest = 'helm' in manifest ? manifest.helm : manifest
         const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
@@ -32,7 +42,7 @@ async function getReleaseData(owner, repo, ref) {
             REPOSITORY: manifest['repository'],
             NAMESPACE: manifest['namespace']
         }
-        return {manifest: manifest, parameters: parameters, version: version}
+        return {manifest: manifest, parameters: parameters, version: version, stagingValues: stagingValues}
     } catch (e) {
         core.setFailed(e)
     }
@@ -44,7 +54,7 @@ function saveReleaseData(parameters, values, environment) {
     let parametersFile= fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
     valuesFileContent = valuesFileContent.replace(/%ENVIRONMENT%/g, environment)
     fs.writeFileSync(`${parameters.RELEASE_NAME}/values`, valuesFileContent);
-    Object.keys(parameters).forEach(p=> {
+    Object.keys(parameters).forEach(p => {
         parametersFile.write(`${p}=${parameters[p]}\n`)
     })
 }
@@ -52,11 +62,11 @@ function saveReleaseData(parameters, values, environment) {
 async function main() {
 
     const event = yaml.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'))
-    const isStaging= process.env.GITHUB_EVENT_NAME === "pull_request"
+    const isStaging = process.env.GITHUB_EVENT_NAME === "pull_request"
     const owner = process.env.GITHUB_REPOSITORY_OWNER
     const ref = process.env.GITHUB_HEAD_REF || undefined
     const {data: repo} = await octokit['rest'].repos.get({owner: owner, repo: event.repository.name})
-    const {manifest: manifest, parameters: parameters, version: version} = await getReleaseData(owner, repo.name, ref)
+    const {manifest: manifest, parameters: parameters, version: version, stagingValues: stagingValues} = await getReleaseData(owner, repo.name, ref)
     let releases = [manifest['release_name']]
 
     const digest = core.getInput('digest')
@@ -67,12 +77,10 @@ async function main() {
     const stagingEnvironment = core.getInput('staging_environment')
     const stagingNamespace = core.getInput('staging_namespace')
 
-
     if (isStaging) {
         manifest['values']['image']['digest'] = digest
-        manifest['values']['replicas'] = 1
         const defaultParams = {NAMESPACE: stagingNamespace, EXTRA_ARGS: '--create-namespace'}
-        saveReleaseData({...parameters,...defaultParams}, manifest['values'], stagingEnvironment)
+        saveReleaseData({...parameters, ...defaultParams}, {...manifest['values'], ...stagingValues}, stagingEnvironment)
         let message = `namespace: ${stagingNamespace}\n`
         let hostnames = []
         let ingresses = new Set([manifest.values?.service?.labels?.ingress])
@@ -80,13 +88,13 @@ async function main() {
         if (memberOf.length > 0) {
             const {data: {items: repos}} = await octokit['rest'].search.repos({q: `${memberOf.join(" ")} in:topics org:${owner}`})
             for (const r of repos) if (r.full_name !== event.repository.full_name) {
-                const data= await getReleaseData(r.owner.login, r.name)
-                if (data !== undefined ) {
+                const data = await getReleaseData(r.owner.login, r.name)
+                if (data !== undefined) {
                     data.manifest['values']['image']['tag'] = data.version
                     data.manifest['values']['replicas'] = 1
                     ingresses.add(data.manifest.values?.service?.labels?.ingress)
                     releases.push(data.manifest['release_name'])
-                    saveReleaseData({...data.parameters,...defaultParams}, data.manifest['values'], stagingEnvironment)
+                    saveReleaseData({...data.parameters, ...defaultParams}, {...data.manifest['values'], ...data.stagingValues}, stagingEnvironment)
                 }
             }
         }

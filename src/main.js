@@ -1,143 +1,159 @@
 require('dotenv-expand').expand(require('dotenv').config())
-const core = require('@actions/core');
 const fs = require('fs');
-const process = require("process");
 const yaml = require("yaml")
+const core = require('@actions/core');
+const {context} = require('@actions/github')
 const {Octokit} = require("@octokit/rest")
-const octokit = new Octokit({auth: core.getInput('github_token')})
+const artifact = require('@actions/artifact');
 
 
-async function getReleaseData(owner, repo, ref) {
-    core.info(`fetching ${owner}/${repo} manifests`)
+// Inputs
+const macros = yaml.parse(core.getInput('macros'))
+const digest = core.getInput('digest')
+const containerRegistry = core.getInput('container_registry')
+const stagingDomain = core.getInput('staging_domain')
+const manifestFile = core.getInput('manifest_file')
+const rpManifestFile = core.getInput('rp_manifest_file')
+const githubToken = core.getInput('github_token')
+const ingressBotLabel = core.getInput('ingress_bot_label')
+const ingressBotHostAnnotation = core.getInput('ingress_bot_host_annotation')
+const ingressBotPathAnnotation = core.getInput('ingress_bot_path_annotation')
+
+
+// Global values
+const workspace = process.env.GITHUB_WORKSPACE
+const octokit = new Octokit({auth: githubToken})
+const artifactClient = artifact.create()
+const outputName = 'releases'
+const releaseFiles = []
+const releasePaths = []
+
+
+async function getManifests(owner, repo, ref) {
+
+
+    let values, parameters, version
+    core.debug(`fetching ${owner}/${repo} manifests`)
+
+    // Fetch helm manifest
     try {
-        const {data: {content: manifestContent}} = await octokit['rest'].repos.getContent({
-            owner: owner,
-            repo: repo,
-            path: core.getInput('manifest_file'),
-            ref: ref
-        })
-        const {data: {content: rpManifestContent}} = await octokit['rest'].repos.getContent({
-            owner: owner,
-            repo: repo,
-            path: core.getInput('rp_manifest_file'),
-            ref: ref
-        })
-        let stagingValues = {}
-        let stagingGroup = []
-        try {
-            let resp = await octokit['rest'].actions['getRepoVariable']({
-                owner: owner,
-                repo: repo,
-                name: 'staging_values'
-            })
-            stagingValues = yaml.parse(resp.data.value)
-        } catch (e) {
-        }
-        try {
-            let resp = await octokit['rest'].actions['getRepoVariable']({
-                owner: owner,
-                repo: repo,
-                name: 'staging_group'
-            })
-            stagingGroup = yaml.parse(resp.data.value)
-        } catch (e) {
-        }
-        let manifest = yaml.parse(Buffer.from(manifestContent, 'base64').toString('utf-8'))
+        const path = manifestFile
+        const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
+        let manifestStr, manifest
+        manifestStr = Buffer.from(content, 'base64').toString('utf-8')
+        macros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
+        manifest = yaml.parse(manifestStr)
         manifest = 'helm' in manifest ? manifest.helm : manifest
-        const {'.': version} = yaml.parse(Buffer.from(rpManifestContent, 'base64').toString('utf-8'))
-        const parameters = {
-            RELEASE_NAME: manifest['release_name'],
-            CHART: manifest['chart'],
-            CHART_VERSION: manifest['chart_version'],
-            REPOSITORY: manifest['repository'],
-            NAMESPACE: manifest['namespace']
+        values = manifest.values
+        // Fetch staging values
+        if (context.eventName === "pull_request") {
+            try {
+                const name = 'staging_values'
+                const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
+                values = {...values, ...yaml.parse(value)}
+            } catch (e) {
+                core.warning(`${repo} staging values are not usable [${e}]`)
+            }
         }
-        return {
-            manifest: manifest,
-            parameters: parameters,
-            version: version,
-            stagingValues: stagingValues,
-            stagingGroup: stagingGroup
-        }
+        delete manifest.values
+        parameters = manifest
     } catch (e) {
-        core.setFailed(e)
+        core.setFailed(`${repo} helm manifest not found [${e}]`)
     }
+
+    // Fetch release-please manifest
+    try {
+        const path = rpManifestFile
+        const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path});
+        ({'.': version} = yaml.parse(Buffer.from(content, 'base64').toString('utf-8')))
+    } catch (e) {
+        core.setFailed(`${repo} release-please manifest not found [${e}]`)
+    }
+
+    return {values, parameters, version}
+
 }
 
-function saveReleaseData(parameters, values, environment) {
-    fs.mkdirSync(parameters.RELEASE_NAME, {recursive: true})
-    let valuesFileContent = JSON.stringify(values, null, 2)
-    let parametersFile = fs.createWriteStream(`${parameters.RELEASE_NAME}/parameters`)
-    valuesFileContent = valuesFileContent.replace(/%ENVIRONMENT%/g, environment)
-    fs.writeFileSync(`${parameters.RELEASE_NAME}/values`, valuesFileContent);
-    Object.keys(parameters).forEach(p => {
-        parametersFile.write(`${p}=${parameters[p]}\n`)
-    })
+function createReleaseFiles(values, parameters) {
+
+    // Create release folder
+    const releasePath = `${workspace}/${parameters['release_name']}`
+    fs.mkdirSync(releasePath, {recursive: true})
+    releasePaths.push(releasePath)
+
+    // Write values to file
+    core.debug(`creating ${releasePath}/values`)
+    fs.writeFileSync(`${releasePath}/values`, JSON.stringify(values, null, 2));
+    releaseFiles.push(`${releasePath}/values`)
+
+    // Write parameters to file
+    core.debug(`creating ${releasePath}/parameters`)
+    let parametersFileString = ''
+    Object.keys(parameters).forEach(p => parametersFileString += `${p.toUpperCase()}=${parameters[p]}\n`)
+    fs.writeFileSync(`${releasePath}/parameters`, parametersFileString)
+    releaseFiles.push(`${releasePath}/parameters`)
+
 }
 
 async function main() {
 
-    const event = yaml.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'))
-    const owner = process.env.GITHUB_REPOSITORY_OWNER
-    const digest = core.getInput('digest')
-    const orgDomain = core.getInput('org_domain')
-    const ingressConfigsRepository = core.getInput('ingress_configs_repository')
-    const environment = core.getInput('environment')
-    const stagingEnvironment = core.getInput('staging_environment')
-    const stagingNamespace = core.getInput('staging_namespace')
-    const {
-        manifest: manifest,
-        parameters: parameters,
-        version: version,
-        stagingValues: stagingValues,
-        stagingGroup: stagingGroup
-    } = await getReleaseData(owner, event.repository.name, process.env.GITHUB_HEAD_REF || undefined)
+    const {owner, repo} = context.repo
+    const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
 
-    if (process.env.GITHUB_EVENT_NAME === "pull_request") {
-        const stagingParameters = {NAMESPACE: stagingNamespace, EXTRA_ARGS: '--create-namespace'}
-        let message = `namespace: ${stagingNamespace}\n`
-        let hostnames = []
-        let ingresses = new Set([manifest.values?.service?.labels?.ingress])
-        manifest['values']['image']['digest'] = digest
-        saveReleaseData({...parameters, ...stagingParameters}, {...manifest['values'], ...stagingValues}, stagingEnvironment)
-        for (const member of stagingGroup) if (member !== event.repository.name) {
-            const data = await getReleaseData(owner, member)
-            data.manifest['values']['image']['tag'] = data.version
-            saveReleaseData({...data.parameters, ...stagingParameters}, {...data.manifest['values'], ...data.stagingValues}, stagingEnvironment)
-            ingresses.add(data.manifest.values?.service?.labels?.ingress)
+    if (['push', 'workflow_dispatch'].includes(context.eventName)) {
+
+        // Prepare production deploy
+        values.image = `${containerRegistry}/${repo}:${version}`
+        await createReleaseFiles(values, parameters)
+
+    } else if (context.eventName === "pull_request") {
+
+        // Prepare staging deploy
+        const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
+        const stagingHost = `${stagingNamespace}.${stagingDomain}`
+
+        values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
+        const stagingReleases = [{values, parameters}]
+        let message = `namespace: ${stagingNamespace}`
+
+        // Fetch staging group members
+        try {
+            core.debug(`fetching ${owner}/${repo} staging group`)
+            const name = 'staging_group';
+            const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
+            for (const member of yaml.parse(value).filter(member => member !== repo)) {
+                const {values, parameters, version} = await getManifests(owner, member)
+                values.image = `${containerRegistry}/${member}:${version}`
+                stagingReleases.push({values, parameters})
+            }
+        } catch (e) {
+            core.debug(`${repo} staging group is not usable [${e}]`)
         }
-        for (const i of ingresses) if (i) {
-            core.info(`fetching ${i} ingress from ${owner}/${ingressConfigsRepository}`)
-            const {data: {content: pContent}} = await octokit['rest'].repos.getContent({
-                owner: owner,
-                repo: ingressConfigsRepository,
-                path: `${environment}/${manifest['namespace']}/${i}/parameters`
-            })
-            const {data: {content: vContent}} = await octokit['rest'].repos.getContent({
-                owner: owner,
-                repo: ingressConfigsRepository,
-                path: `${environment}/${manifest['namespace']}/${i}/values`
-            })
-            const values = yaml.parse(Buffer.from(vContent, 'base64').toString('utf-8'))
-            const parameters = {...stagingParameters};
-            Buffer.from(pContent, 'base64')
-                .toString('utf-8')
-                .split('\n')
-                .filter(n => n)
-                .forEach(line => {
-                    parameters[line.split('=')[0]] = line.split('=')[1]
-                })
-            values.data.hostname = `${i}.${event.number}.${manifest['release_name']}.${stagingEnvironment}.${orgDomain}`
-            hostnames.push(values.data.hostname)
-            saveReleaseData(parameters, values, stagingEnvironment)
-            message += `${i}: https://${values.data.hostname}\n`
+
+        // Save release files
+        for (const release of stagingReleases) {
+            let {values, parameters} = release
+            parameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
+
+            // Edit ingress-bot annotations
+            if (ingressBotLabel in values.service.labels) {
+                values.service.annotations[ingressBotHostAnnotation] = stagingHost
+                message += `\n${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}`
+            }
+
+            createReleaseFiles(values, parameters)
         }
+
         core.setOutput('message', message)
-        core.setOutput('hostnames', JSON.stringify(hostnames))
-    } else {
-        manifest['values']['image']['tag'] = version
-        saveReleaseData(parameters, manifest['values'], environment)
+        core.setOutput('staging_host', stagingHost)
+        const labels = [`namespace: ${stagingNamespace}`]
+        const issue_number = context.payload.number
+        await octokit.issues.addLabels({owner, repo, labels, issue_number})
+
     }
+
+    core.setOutput(outputName, releasePaths.join(' '))
+    await artifactClient.uploadArtifact(outputName, releaseFiles, workspace)
 
 }
 

@@ -1,10 +1,10 @@
-name: 'prepare-helm-releases'
+name: 'Create Helm releases'
 description: ''
 runs:
   using: 'node16'
   main: 'dist/index.js'
 inputs:
-  github_token:
+  macros:
     description: ''
     required: true
   manifest_file:
@@ -13,22 +13,29 @@ inputs:
   rp_manifest_file:
     description: ''
     required: true
-  ingress_configs_repository:
+  container_registry:
     description: ''
     required: true
   digest:
     description: ''
     default: ''
     required: false
-  org_domain:
+  staging_domain:
     description: ''
     required: false
-  environment:
+  github_token:
     description: ''
     required: false
-  staging_environment:
+    default: ${{ github.token }}
+  ingress_bot_label:
     description: ''
     required: false
-  staging_namespace:
+    default: ptonini.github.io/ingress-bot
+  ingress_bot_host_annotation:
     description: ''
     required: false
+    default: ptonini.github.io/ingress-host
+  ingress_bot_path_annotation:
+    description: ''
+    required: false
+    default: ptonini.github.io/ingress-path

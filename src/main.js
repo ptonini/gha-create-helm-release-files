@@ -1,9 +1,9 @@
 require('dotenv-expand').expand(require('dotenv').config())
 const fs = require('fs');
-const yaml = require("yaml")
+const yaml = require('yaml');
 const core = require('@actions/core');
 const {context} = require('@actions/github')
-const {Octokit} = require("@octokit/rest")
+const {Octokit} = require('@octokit/rest')
 const artifact = require('@actions/artifact');
 
 
@@ -31,7 +31,6 @@ const releasePaths = []
 
 async function getManifests(owner, repo, ref) {
 
-
     let values, parameters, version
     core.debug(`fetching ${owner}/${repo} manifests`)
 
@@ -46,7 +45,7 @@ async function getManifests(owner, repo, ref) {
         manifest = 'helm' in manifest ? manifest.helm : manifest
         values = manifest.values
         // Fetch staging values
-        if (context.eventName === "pull_request") {
+        if (context.eventName === 'pull_request') {
             try {
                 const name = 'staging_values'
                 const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
@@ -88,9 +87,9 @@ function createReleaseFiles(values, parameters) {
 
     // Write parameters to file
     core.debug(`creating ${releasePath}/parameters`)
-    let parametersFileString = ''
-    Object.keys(parameters).forEach(p => parametersFileString += `${p.toUpperCase()}=${parameters[p]}\n`)
-    fs.writeFileSync(`${releasePath}/parameters`, parametersFileString)
+    let fileContent = String()
+    Object.keys(parameters).forEach(p => fileContent += `${p.toUpperCase()}=${parameters[p]}\n`)
+    fs.writeFileSync(`${releasePath}/parameters`, fileContent)
     releaseFiles.push(`${releasePath}/parameters`)
 
 }
@@ -104,17 +103,16 @@ async function main() {
 
         // Prepare production deploy
         values.image = `${containerRegistry}/${repo}:${version}`
-        await createReleaseFiles(values, parameters)
+        createReleaseFiles(values, parameters)
 
-    } else if (context.eventName === "pull_request") {
+    } else if (context.eventName === 'pull_request') {
 
         // Prepare staging deploy
         const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
         const stagingHost = `${stagingNamespace}.${stagingDomain}`
-
-        values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
         const stagingReleases = [{values, parameters}]
         let message = `namespace: ${stagingNamespace}`
+        values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
 
         // Fetch staging group members
         try {
@@ -146,9 +144,12 @@ async function main() {
 
         core.setOutput('message', message)
         core.setOutput('staging_host', stagingHost)
-        const labels = [`namespace: ${stagingNamespace}`]
-        const issue_number = context.payload.number
-        await octokit.issues.addLabels({owner, repo, labels, issue_number})
+        await octokit.issues.addLabels({
+            owner,
+            repo,
+            labels: [`namespace: ${stagingNamespace}`],
+            issue_number: context.payload.number
+        })
 
     }
 

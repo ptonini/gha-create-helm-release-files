@@ -24,7 +24,13 @@ const ingressBotPathAnnotation = core.getInput('ingress_bot_path_annotation')
 const workspace = process.env.GITHUB_WORKSPACE
 const octokit = new Octokit({auth: githubToken})
 const artifactClient = artifact.create()
-const outputName = 'releases'
+const productionEvents = ['push', 'workflow_dispatch']
+const stagingEvents = ['pull_request']
+const stagingValuesVar = 'staging_values'
+const stagingGroupVar = 'staging_group'
+const releasesOutputName = 'releases'
+const valuesFilename = 'values'
+const parametersFilename = 'parameters'
 const releaseFiles = []
 const releasePaths = []
 
@@ -38,16 +44,15 @@ async function getManifests(owner, repo, ref) {
     try {
         const path = manifestFile
         const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
-        let manifestStr, manifest
-        manifestStr = Buffer.from(content, 'base64').toString('utf-8')
+        let manifestStr = Buffer.from(content, 'base64').toString('utf-8')
         macros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
-        manifest = yaml.parse(manifestStr)
-        manifest = 'helm' in manifest ? manifest.helm : manifest
+        let manifest = yaml.parse(manifestStr)
+        manifest = manifest['helm'] ?? manifest
         values = manifest.values
-        // Fetch staging values
-        if (context.eventName === 'pull_request') {
+        if (stagingEvents.includes(context.eventName)) {
+            // Fetch staging values
             try {
-                const name = 'staging_values'
+                const name = stagingValuesVar
                 const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
                 values = {...values, ...yaml.parse(value)}
             } catch (e) {
@@ -80,17 +85,17 @@ function createReleaseFiles(values, parameters) {
     fs.mkdirSync(releasePath, {recursive: true})
     releasePaths.push(releasePath)
 
-    // Write values to file
-    core.debug(`creating ${releasePath}/values`)
-    fs.writeFileSync(`${releasePath}/values`, JSON.stringify(values, null, 2));
-    releaseFiles.push(`${releasePath}/values`)
+    // Write values file
+    core.debug(`creating ${releasePath}/${valuesFilename}`)
+    fs.writeFileSync(`${releasePath}/${valuesFilename}`, JSON.stringify(values, null, 2));
+    releaseFiles.push(`${releasePath}/${valuesFilename}`)
 
-    // Write parameters to file
-    core.debug(`creating ${releasePath}/parameters`)
+    // Write parameters file
+    core.debug(`creating ${releasePath}/${parametersFilename}`)
     let fileContent = String()
     Object.keys(parameters).forEach(p => fileContent += `${p.toUpperCase()}=${parameters[p]}\n`)
-    fs.writeFileSync(`${releasePath}/parameters`, fileContent)
-    releaseFiles.push(`${releasePath}/parameters`)
+    fs.writeFileSync(`${releasePath}/${parametersFilename}`, fileContent)
+    releaseFiles.push(`${releasePath}/${parametersFilename}`)
 
 }
 
@@ -99,25 +104,25 @@ async function main() {
     const {owner, repo} = context.repo
     const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
 
-    if (['push', 'workflow_dispatch'].includes(context.eventName)) {
+    if (productionEvents.includes(context.eventName)) {
 
         // Prepare production deploy
         values.image = `${containerRegistry}/${repo}:${version}`
         createReleaseFiles(values, parameters)
 
-    } else if (context.eventName === 'pull_request') {
+    } else if (stagingEvents.includes(context.eventName)) {
 
         // Prepare staging deploy
         const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
         const stagingHost = `${stagingNamespace}.${stagingDomain}`
         const stagingReleases = [{values, parameters}]
-        let message = `namespace: ${stagingNamespace}`
+        let message = `#### Namespace\n${stagingNamespace}\n#### Services\n`
         values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
 
         // Fetch staging group members
         try {
             core.debug(`fetching ${owner}/${repo} staging group`)
-            const name = 'staging_group';
+            const name = stagingGroupVar;
             const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
             for (const member of yaml.parse(value).filter(member => member !== repo)) {
                 const {values, parameters, version} = await getManifests(owner, member)
@@ -132,29 +137,24 @@ async function main() {
         for (const release of stagingReleases) {
             let {values, parameters} = release
             parameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
-
             // Edit ingress-bot annotations
             if (ingressBotLabel in values.service.labels) {
                 values.service.annotations[ingressBotHostAnnotation] = stagingHost
-                message += `\n${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}`
+                message += `* ${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}\n`
             }
-
             createReleaseFiles(values, parameters)
         }
 
         core.setOutput('message', message)
         core.setOutput('staging_host', stagingHost)
         await octokit.issues.addLabels({
-            owner,
-            repo,
-            labels: [`namespace: ${stagingNamespace}`],
-            issue_number: context.payload.number
+            owner, repo, labels: [`namespace: ${stagingNamespace}`], issue_number: context.payload.number
         })
 
     }
 
-    core.setOutput(outputName, releasePaths.join(' '))
-    await artifactClient.uploadArtifact(outputName, releaseFiles, workspace)
+    core.setOutput(releasesOutputName, releasePaths.join(' '))
+    await artifactClient.uploadArtifact(releasesOutputName, releaseFiles, workspace)
 
 }
 

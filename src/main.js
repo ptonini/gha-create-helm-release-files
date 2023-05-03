@@ -21,6 +21,7 @@ const ingressBotPathAnnotation = core.getInput('ingress_bot_path_annotation')
 
 
 // Global values
+const {owner, repo} = context.repo
 const workspace = process.env.GITHUB_WORKSPACE
 const octokit = new Octokit({auth: githubToken})
 const artifactClient = artifact.create()
@@ -101,12 +102,10 @@ function createReleaseFiles(values, parameters) {
 
 async function main() {
 
-    const {owner, repo} = context.repo
-    const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
-
     if (productionEvents.includes(context.eventName)) {
 
         // Prepare production deploy
+        const {values, parameters, version} = await getManifests(owner, repo)
         values.image = `${containerRegistry}/${repo}:${version}`
         createReleaseFiles(values, parameters)
 
@@ -115,8 +114,12 @@ async function main() {
         // Prepare staging deploy
         const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
         const stagingHost = `${stagingNamespace}.${stagingDomain}`
-        const stagingReleases = [{values, parameters}]
+        const stagingReleases = []
         let message = `#### Namespace\n${stagingNamespace}\n#### Services\n`
+
+        // Create current repo release
+        const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
+        stagingReleases.push({values, parameters})
         values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
 
         // Fetch staging group members
@@ -138,7 +141,7 @@ async function main() {
             let {values, parameters} = release
             parameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
             // Edit ingress-bot annotations
-            if (ingressBotLabel in values.service.labels) {
+            if (values.service?.enabled && ingressBotLabel in values.service.labels) {
                 values.service.annotations[ingressBotHostAnnotation] = stagingHost
                 message += `* ${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}\n`
             }
@@ -151,7 +154,7 @@ async function main() {
             owner, repo, labels: [`namespace: ${stagingNamespace}`], issue_number: context.payload.number
         })
 
-    }
+    } else core.setFailed(`unsupported event: ${context.eventName}`)
 
     core.setOutput(releasesOutputName, releasePaths.join(' '))
     await artifactClient.uploadArtifact(releasesOutputName, releaseFiles, workspace)

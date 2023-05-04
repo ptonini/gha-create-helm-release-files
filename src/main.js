@@ -8,8 +8,9 @@ const artifact = require('@actions/artifact');
 
 
 // Inputs
-const macros = yaml.parse(core.getInput('macros'))
+const macros = yaml.parse(core.getInput('macros') ?? '[]')
 const digest = core.getInput('digest')
+const demonstration = core.getInput('demonstration') === 'true'
 const containerRegistry = core.getInput('container_registry')
 const stagingDomain = core.getInput('staging_domain')
 const manifestFile = core.getInput('manifest_file')
@@ -32,7 +33,7 @@ const stagingGroupVar = 'staging_group'
 const releasesOutputName = 'releases'
 const valuesFilename = 'values'
 const parametersFilename = 'parameters'
-const releaseFiles = []
+const artifactFiles = []
 const releasePaths = []
 
 
@@ -43,7 +44,7 @@ async function getManifests(owner, repo, ref) {
 
     // Fetch helm manifest
     try {
-        const path = manifestFile
+        const path = `${manifestFile}`
         const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
         let manifestStr = Buffer.from(content, 'base64').toString('utf-8')
         macros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
@@ -89,14 +90,14 @@ function createReleaseFiles(values, parameters) {
     // Write values file
     core.debug(`creating ${releasePath}/${valuesFilename}`)
     fs.writeFileSync(`${releasePath}/${valuesFilename}`, JSON.stringify(values, null, 2));
-    releaseFiles.push(`${releasePath}/${valuesFilename}`)
+    artifactFiles.push(`${releasePath}/${valuesFilename}`)
 
     // Write parameters file
     core.debug(`creating ${releasePath}/${parametersFilename}`)
     let fileContent = String()
     Object.keys(parameters).forEach(p => fileContent += `${p.toUpperCase()}=${parameters[p]}\n`)
     fs.writeFileSync(`${releasePath}/${parametersFilename}`, fileContent)
-    releaseFiles.push(`${releasePath}/${parametersFilename}`)
+    artifactFiles.push(`${releasePath}/${parametersFilename}`)
 
 }
 
@@ -118,9 +119,11 @@ async function main() {
         let message = `#### Namespace\n${stagingNamespace}\n#### Services\n`
 
         // Create current repo release
-        const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
-        stagingReleases.push({values, parameters})
-        values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
+        if (!demonstration) {
+            const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
+            stagingReleases.push({values, parameters})
+            values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
+        }
 
         // Fetch staging group members
         try {
@@ -157,7 +160,7 @@ async function main() {
     } else core.setFailed(`unsupported event: ${context.eventName}`)
 
     core.setOutput(releasesOutputName, releasePaths.join(' '))
-    await artifactClient.uploadArtifact(releasesOutputName, releaseFiles, workspace)
+    await artifactClient.uploadArtifact(releasesOutputName, artifactFiles, workspace)
 
 }
 

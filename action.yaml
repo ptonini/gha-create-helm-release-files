@@ -4,9 +4,6 @@ runs:
   using: 'node16'
   main: 'dist/index.js'
 inputs:
-  macros:
-    description: ''
-    required: true
   manifest_file:
     description: ''
     required: true
@@ -16,6 +13,9 @@ inputs:
   container_registry:
     description: ''
     required: true
+  macros:
+    description: ''
+    required: false
   digest:
     description: ''
     default: ''
@@ -27,6 +27,9 @@ inputs:
     description: ''
     required: false
     default: ${{ github.token }}
+  demonstration:
+    description: ''
+    required: false
   ingress_bot_label:
     description: ''
     required: false

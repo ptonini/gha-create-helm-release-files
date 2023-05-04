@@ -8,7 +8,7 @@ const artifact = require('@actions/artifact');
 
 
 // Inputs
-const macros = yaml.parse(core.getInput('macros') ?? '[]')
+const macros = yaml.parse(core.getInput('macros')) ?? []
 const digest = core.getInput('digest')
 const demonstration = core.getInput('demonstration') === 'true'
 const containerRegistry = core.getInput('container_registry')
@@ -144,7 +144,7 @@ async function main() {
             let {values, parameters} = release
             parameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
             // Edit ingress-bot annotations
-            if (values.service?.enabled && ingressBotLabel in values.service.labels) {
+            if ('service' in values && ingressBotLabel in values.service.labels) {
                 values.service.annotations[ingressBotHostAnnotation] = stagingHost
                 message += `* ${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}\n`
             }

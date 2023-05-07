@@ -28,8 +28,8 @@ const octokit = new Octokit({auth: githubToken})
 const artifactClient = artifact.create()
 const productionEvents = ['push', 'workflow_dispatch']
 const stagingEvents = ['pull_request']
-const stagingValuesVar = 'staging_values'
-const stagingGroupVar = 'staging_group'
+const stagingValuesVariable = 'staging_values'
+const stagingGroupVariable = 'staging_group'
 const releasesOutputName = 'releases'
 const valuesFilename = 'values'
 const parametersFilename = 'parameters'
@@ -44,7 +44,7 @@ async function getManifests(owner, repo, ref) {
 
     // Fetch helm manifest
     try {
-        const path = `${manifestFile}`
+        const path = manifestFile
         const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
         let manifestStr = Buffer.from(content, 'base64').toString('utf-8')
         macros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
@@ -54,7 +54,7 @@ async function getManifests(owner, repo, ref) {
         if (stagingEvents.includes(context.eventName)) {
             // Fetch staging values
             try {
-                const name = stagingValuesVar
+                const name = stagingValuesVariable
                 const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
                 values = {...values, ...yaml.parse(value)}
             } catch (e) {
@@ -88,12 +88,12 @@ function createReleaseFiles(values, parameters) {
     releasePaths.push(releasePath)
 
     // Write values file
-    core.debug(`creating ${releasePath}/${valuesFilename}`)
+    core.debug(`writing ${releasePath}/${valuesFilename}`)
     fs.writeFileSync(`${releasePath}/${valuesFilename}`, JSON.stringify(values, null, 2));
     artifactFiles.push(`${releasePath}/${valuesFilename}`)
 
     // Write parameters file
-    core.debug(`creating ${releasePath}/${parametersFilename}`)
+    core.debug(`writing ${releasePath}/${parametersFilename}`)
     let fileContent = String()
     Object.keys(parameters).forEach(p => fileContent += `${p.toUpperCase()}=${parameters[p]}\n`)
     fs.writeFileSync(`${releasePath}/${parametersFilename}`, fileContent)
@@ -116,7 +116,9 @@ async function main() {
         const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
         const stagingHost = `${stagingNamespace}.${stagingDomain}`
         const stagingReleases = []
-        let message = `#### Namespace\n${stagingNamespace}\n#### Services\n`
+        let message = `### Namespace\n${stagingNamespace}\n### Services\n`
+
+        core.notice(`Namespace: ${stagingNamespace}`)
 
         // Create current repo release
         if (!demonstration) {
@@ -128,7 +130,7 @@ async function main() {
         // Fetch staging group members
         try {
             core.debug(`fetching ${owner}/${repo} staging group`)
-            const name = stagingGroupVar;
+            const name = stagingGroupVariable;
             const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
             for (const member of yaml.parse(value).filter(member => member !== repo)) {
                 const {values, parameters, version} = await getManifests(owner, member)
@@ -140,17 +142,17 @@ async function main() {
         }
 
         // Save release files
-        for (const release of stagingReleases) {
-            let {values, parameters} = release
-            parameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
+        for (const {values, parameters} of stagingReleases) {
+            const stagingParameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
             // Edit ingress-bot annotations
             if ('service' in values && ingressBotLabel in values.service.labels) {
                 values.service.annotations[ingressBotHostAnnotation] = stagingHost
-                message += `* ${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}\n`
+                const line = `${parameters['release_name']}: https://${stagingHost}${values.service.annotations[ingressBotPathAnnotation]}`
+                core.notice(line)
+                message += `* ${line}\n`
             }
-            createReleaseFiles(values, parameters)
+            createReleaseFiles(values, stagingParameters)
         }
-
         core.setOutput('message', message)
         core.setOutput('staging_host', stagingHost)
         await octokit.issues.addLabels({

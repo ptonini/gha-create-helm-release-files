@@ -1,8 +1,5 @@
-name: 'Create Helm releases'
+name: create-helm-release-files
 description: ''
-runs:
-  using: 'node16'
-  main: 'dist/index.js'
 inputs:
   manifest_file:
     description: ''
@@ -42,3 +39,6 @@ inputs:
     description: ''
     required: false
     default: ptonini.github.io/ingress-path
+runs:
+  using: node16
+  main: dist/index.js

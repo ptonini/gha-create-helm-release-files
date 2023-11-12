@@ -8,12 +8,11 @@ const artifact = require('@actions/artifact');
 
 
 // Inputs
-const macros = yaml.parse(core.getInput('macros')) ?? []
 const digest = core.getInput('digest')
-const demonstration = core.getInput('demonstration') === 'true'
 const containerRegistry = core.getInput('container_registry')
 const stagingDomain = core.getInput('staging_domain')
 const manifestFile = core.getInput('manifest_file')
+const manifestMacros = yaml.parse(core.getInput('manifest_macros')) ?? []
 const rpManifestFile = core.getInput('rp_manifest_file')
 const githubToken = core.getInput('github_token')
 const ingressBotLabel = core.getInput('ingress_bot_label')
@@ -28,7 +27,7 @@ const octokit = new Octokit({auth: githubToken})
 const artifactClient = artifact.create()
 const productionEvents = ['push', 'workflow_dispatch']
 const stagingEvents = ['pull_request']
-const stagingValuesVariable = 'staging_values'
+const extraValuesVariable = 'extra_values'
 const stagingGroupVariable = 'staging_group'
 const releasesOutputName = 'releases'
 const valuesFilename = 'values'
@@ -47,21 +46,19 @@ async function getManifests(owner, repo, ref) {
         const path = manifestFile
         const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
         let manifestStr = Buffer.from(content, 'base64').toString('utf-8')
-        macros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
+        // Interpolate manifest macros
+        manifestMacros.forEach(macro => manifestStr = manifestStr.replaceAll(`%${macro.name}%`, macro.value))
+        // Parse manifest
         let manifest = yaml.parse(manifestStr)
-        manifest = manifest['helm'] ?? manifest
         values = manifest.values
-        if (stagingEvents.includes(context.eventName)) {
-            // Fetch staging values
-            try {
-                const name = stagingValuesVariable
-                const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
-                values = {...values, ...yaml.parse(value)}
-            } catch (e) {
-                core.warning(`${repo} staging values are not usable [${e}]`)
-            }
-        }
         delete manifest.values
+        // Fetch extra values
+        try {
+            const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name: extraValuesVariable})
+            values = {...values, ...yaml.parse(value)}
+        } catch (e) {
+            core.warning(`${repo} extra values are unusable [${e}]`)
+        }
         parameters = manifest
     } catch (e) {
         core.setFailed(`${repo} helm manifest not found [${e}]`)
@@ -121,11 +118,9 @@ async function main() {
         core.notice(`Namespace: ${stagingNamespace}`)
 
         // Create current repo release
-        if (!demonstration) {
-            const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
-            stagingReleases.push({values, parameters})
-            values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
-        }
+        const {values, parameters, version} = await getManifests(owner, repo, context.payload.pull_request?.head.ref)
+        stagingReleases.push({values, parameters})
+        values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
 
         // Fetch staging group members
         try {

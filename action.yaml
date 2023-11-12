@@ -10,7 +10,7 @@ inputs:
   container_registry:
     description: ''
     required: true
-  macros:
+  manifest_macros:
     description: ''
     required: false
   digest:

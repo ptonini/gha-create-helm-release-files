@@ -1,22 +1,25 @@
 name: create-helm-release-files
 description: ''
 inputs:
+  environment:
+    description: ''
+    required: true
+  digest:
+    description: ''
+    default: ''
+    required: false
   manifest_file:
     description: ''
     required: true
+  manifest_macros:
+    description: ''
+    required: false
   rp_manifest_file:
     description: ''
     required: true
   container_registry:
     description: ''
     required: true
-  manifest_macros:
-    description: ''
-    required: false
-  digest:
-    description: ''
-    default: ''
-    required: false
   staging_domain:
     description: ''
     required: false
@@ -24,9 +27,6 @@ inputs:
     description: ''
     required: false
     default: ${{ github.token }}
-  demonstration:
-    description: ''
-    required: false
   ingress_bot_label:
     description: ''
     required: false

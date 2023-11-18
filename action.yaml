@@ -39,6 +39,28 @@ inputs:
     description: ''
     required: false
     default: ptonini.github.io/ingress-path
+  extra_values_variable:
+    description: ''
+    required: false
+    default: extra_values
+  staging_group_variable:
+    description: ''
+    required: false
+    default: staging_group
+  releases_output_name:
+    description: ''
+    required: false
+    default: releases
+  values_filename:
+    description: ''
+    required: false
+    default: values
+  parameters_filename:
+    description: ''
+    required: false
+    default: parameters
+
+
 runs:
   using: node16
   main: dist/index.js

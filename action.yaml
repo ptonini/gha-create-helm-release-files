@@ -59,6 +59,10 @@ inputs:
     description: ''
     required: false
     default: parameters
+  appendable_arrays:
+    description: ''
+    required: false
+    default: volumes,volumeMounts
 
 
 runs:

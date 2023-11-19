@@ -16,7 +16,6 @@ const artifactClient = artifact.create()
 const artifactFiles = []
 const releasePaths = []
 
-
 // Inputs
 const environment = core.getInput('environment')
 const digest = core.getInput('digest')
@@ -33,18 +32,15 @@ const releasesOutputName = core.getInput('releases_output_name')
 const valuesFilename = core.getInput('values_filename')
 const parametersFilename = core.getInput('parameters_filename')
 const octokit = new Octokit({auth: core.getInput('github_token')})
-
-
-
+const appendableArrays = core.getInput('appendable_arrays').split(',')
 
 function mergeValues(values, value) {
-    return _.mergeWith(values, value, (objValue, srcValue) => {
-        if (_.isArray(objValue)) {
-            return objValue.concat(srcValue);
+    return _.mergeWith(values, value, (objValue, srcValue, key) => {
+        if (_.isArray(objValue) && appendableArrays.includes(key)) {
+            return objValue.concat(srcValue)
         }
     })
 }
-
 
 async function getManifests(owner, repo, repository_id, environment_name, ref) {
 
@@ -107,7 +103,6 @@ function createReleaseFiles(values, parameters) {
     parameters.extra_args = parameters.extra_args.concat(`-f ${releaseName}/${valuesFilename} `)
     artifactFiles.push(`${releasePath}/${valuesFilename}`)
 
-
     // Write parameters file
     core.debug(`writing ${releasePath}/${parametersFilename}`)
     let fileContent = String()
@@ -131,29 +126,28 @@ async function main() {
         // Prepare staging deploy
         const stagingNamespace = `${repo.replaceAll('_', '-')}-${context.payload.number}`
         const stagingHost = `${stagingNamespace}.${stagingDomain}`
-        const stagingReleases = []
         let message = `### Namespace\n${stagingNamespace}\n### Services\n`
-
         core.notice(`Namespace: ${stagingNamespace}`)
 
         // Create current repo release
         const {values, parameters, version} = await getManifests(owner, repo, repoId, environment, context.payload.pull_request?.head.ref)
-        stagingReleases.push({values, parameters})
+        let stagingReleases = [{values, parameters}]
         values.image = digest ? `${containerRegistry}/${repo}@${digest}` : `${containerRegistry}/${repo}:${version}`
 
         // Fetch staging group members
-        // try {
-        //     core.debug(`fetching ${repoFullName} staging group`)
-        //     const name = stagingGroupVariable;
-        //     const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
-        //     for (const member of yaml.parse(value).filter(member => member !== repo)) {
-        //         const {values, parameters, version} = await getManifests(owner, member)
-        //         values.image = `${containerRegistry}/${member}:${version}`
-        //         stagingReleases.push({values, parameters})
-        //     }
-        // } catch (e) {
-        //     core.debug(`${repo} staging group is not usable [${e}]`)
-        // }
+        try {
+            core.debug(`fetching ${repoFullName} staging group`)
+            const name = stagingGroupVariable;
+            const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
+            for (const member of yaml.parse(value).filter(member => member !== repo)) {
+                let m = await octokit.rest.repos.get({owner, repo: member})
+                const {values, parameters, version} = await getManifests(owner, m["name"], m["id"], environment)
+                values.image = `${containerRegistry}/${member}:${version}`
+                stagingReleases.push({values, parameters})
+            }
+        } catch (e) {
+            core.debug(`${repo} staging group is not usable [${e}]`)
+        }
 
         // Save release files
         for (const {values, parameters} of stagingReleases) {

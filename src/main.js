@@ -50,28 +50,30 @@ async function getManifests(owner, repo, repository_id, environment_name, ref) {
     try {
         // Fetch helm manifest
         const path = manifestFile
+        const name = extraValuesVariable
         const {data: {content: content}} = await octokit.rest.repos.getContent({owner, repo, ref, path})
         let manifestStr = Buffer.from(content, 'base64').toString('utf-8')
-        // Parse manifest and extract values
-        let manifest = yaml.parse(manifestStr)
-        values = manifest.values
-        delete manifest.values
-        // Fetch extra values
-        let name = extraValuesVariable
+
+        // Parse manifest and separate values from parameters
+        parameters = yaml.parse(manifestStr)
+        values = parameters.values
+        delete parameters.values
+
+        // Fetch repository extra values
         try {
             const {data: {value: value}} = await octokit.rest.actions['getRepoVariable']({owner, repo, name})
             values = mergeValues(values, yaml.parse(value))
         } catch (e) {
             core.warning(`${repo} repository extra values are unusable [${e}]`)
         }
+
+        // Fetch environment extra values
         try {
             const {data: {value: value}} = await octokit.rest.actions['getEnvironmentVariable']({repository_id, environment_name, name})
             values = mergeValues(values, yaml.parse(value))
         } catch (e) {
             core.warning(`${repo} environment extra values are unusable [${e}]`)
         }
-        parameters = manifest
-        parameters.extra_args = ""
     } catch (e) {
         core.setFailed(`${repo} helm manifest not found [${e}]`)
     }
@@ -100,7 +102,6 @@ function createReleaseFiles(values, parameters) {
     // Write values files
     core.debug(`writing ${valuesFilename}`)
     fs.writeFileSync(`${releasePath}/${valuesFilename}`, JSON.stringify(values, null, 2));
-    parameters.extra_args = parameters.extra_args.concat(`-f ${releaseName}/${valuesFilename} `)
     artifactFiles.push(`${releasePath}/${valuesFilename}`)
 
     // Write parameters file
@@ -152,6 +153,7 @@ async function main() {
         // Save release files
         for (const {values, parameters} of stagingReleases) {
             const stagingParameters = {...parameters, ...{namespace: stagingNamespace, extra_args: '--create-namespace'}}
+
             // Edit ingress-bot annotations
             if ('service' in values && ingressBotLabel in values.service.labels) {
                 values.service.annotations[ingressBotHostAnnotation] = stagingHost
